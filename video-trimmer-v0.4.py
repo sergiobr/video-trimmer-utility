@@ -11,12 +11,17 @@ class SceneSplitter:
     def __init__(self, scene_detector):
         self.scene_detector = scene_detector
 
-    def split_scenes(self, video_clip):
-        for frame_time in video_clip.iter_frames(with_times=True, dtype=float):
-            frame_pos_sec, frame_img = frame_time
-            frame_img_uint8 = (frame_img * 255).astype(np.uint8)
-            self.scene_detector.process_frame(frame_pos_sec, frame_img_uint8)
-        return self.scene_detector.get_scene_list() if self.scene_detector else []
+    def split_scenes(self, video_manager):
+        video_clip = VideoFileClip(video_manager.filename)
+
+        for frame_number in range(0, int(video_clip.fps * video_clip.duration), int(video_clip.fps)):
+            frame_img = video_clip.get_frame(frame_number / video_clip.fps)
+            self.scene_detector.process_frame(frame_number, frame_img)
+
+        if isinstance(self.scene_detector, ContentDetector):
+            return self.scene_detector.get_scene_list()
+        else:
+            return []
 
 @click.command()
 @click.argument('input_path', type=click.Path(exists=True, dir_okay=False))
