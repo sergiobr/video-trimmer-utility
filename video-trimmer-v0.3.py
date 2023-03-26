@@ -49,7 +49,7 @@ class SceneSplitter:
         self.scene_detector = scene_detector
 
     def split_scenes(self, video_manager):
-        self.scene_detector.detect_scenes(video_manager)
+        self.scene_detector.process_video(video_manager)  # Use process_video instead of detect_scenes
         return self.scene_detector.get_scene_list()
 
 class VideoSplitter:
