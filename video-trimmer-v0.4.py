@@ -11,9 +11,7 @@ class SceneSplitter:
     def __init__(self, scene_detector):
         self.scene_detector = scene_detector
 
-    def split_scenes(self, video_manager):
-        video_clip = VideoFileClip(video_manager.filename)
-
+    def split_scenes(self, video_clip):
         for frame_number in range(0, int(video_clip.fps * video_clip.duration), int(video_clip.fps)):
             frame_img = video_clip.get_frame(frame_number / video_clip.fps)
             self.scene_detector.process_frame(frame_number, frame_img)
@@ -66,14 +64,14 @@ def detect_scenes(input_path, video_info, max_scenes, crop_size, min_frames_per_
     # Read and process each frame
     for frame_time in video_clip.iter_frames(with_times=True, dtype=float):
         frame_pos_sec, frame_img = frame_time
-        video_manager = (frame_pos_sec, video_clip.get_frame(frame_pos_sec))
+        video_manager = video_clip
 
         # Convert the frame dtype to uint8
         frame_img_uint8 = (frame_img * 255).astype(np.uint8)
 
         scene_detector.process_frame(frame_pos_sec, frame_img_uint8)
 
-    scene_splitter.split_scenes(scene_detector)
+    scene_splitter.split_scenes(video_clip)
     output_files = scene_splitter.split_video(
         output_dir, os.path.splitext(os.path.basename(input_path))[0])
     return output_files
