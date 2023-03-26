@@ -98,9 +98,9 @@ def calculate_sharpness(frame: np.ndarray) -> float:
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     return cv2.Laplacian(gray, cv2.CV_64F).var()
 
-def detect_scenes(video_path: str, video_info: Dict, max_scenes: int, crop_size: Tuple[int, int], min_frames_per_scene: int, max_frames_per_scene: int) -> List[Tuple[int, int]]:
+def detect_scenes(input_path, video_info, max_scenes, crop_size, min_frames_per_scene, max_frames_per_scene, output_dir):
     # Initialize the video manager and scene detector
-    video_manager = VideoManager([video_path])
+    video_manager = VideoManager([input_path])
     video_manager.set_downscale_factor(max(crop_size) / max(video_info["width"], video_info["height"]))
 
     scene_detector = ContentDetector(
@@ -113,7 +113,9 @@ def detect_scenes(video_path: str, video_info: Dict, max_scenes: int, crop_size:
     # Create a video splitter and process the video
     splitter = SceneSplitter(scene_detector)
     video_splitter = VideoSplitter(video_manager, splitter)
-    video_splitter.split()
+
+    base_name = os.path.splitext(os.path.basename(input_path))[0]
+    video_splitter.split_video(output_dir, base_name)  # Call split_video instead of split
 
     # Get the detected scenes
     scenes = splitter.get_scene_list()
@@ -185,7 +187,7 @@ def process_video(video_path: str, max_scenes: int, crop_size: Tuple[int, int],
     streams = sorted(eval(output.decode())["streams"], key=lambda x: x["codec_name"] == "video", reverse=True)
     video_info = streams[0]
     # Detect scenes
-    scenes = detect_scenes(input_path, video_info, max_scenes, crop_size, min_frames_per_scene, max_frames_per_scene)
+    scenes = detect_scenes(input_path, video_info, max_scenes, crop_size, min_frames_per_scene, max_frames_per_scene, output_dir)
     scenes.sort(key=lambda scene: scene.start_time)
 
     # Trim scenes
