@@ -1,5 +1,6 @@
 import datetime
 import json
+import traceback
 import typing
 from typing import List, Dict, Any, Tuple, Optional, Union
 import unicodedata
@@ -10,8 +11,6 @@ from scenedetect import VideoManager
 from scenedetect.scene_manager import SceneManager
 from scenedetect.detectors import ContentDetector
 from scenedetect.frame_timecode import FrameTimecode
-from tqdm import tqdm
-import numpy as np
 import gradio as gr
 import subprocess, os
 from werkzeug.utils import secure_filename
@@ -49,37 +48,34 @@ def calculate_sharpness(frame: np.ndarray) -> float:
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     return cv2.Laplacian(gray, cv2.CV_64F).var()
 
-
-def detect_scenes(video_info: List[dict], max_scenes: int, crop_size: Tuple[int, int], min_frames_per_scene: int, max_frames_per_scene: int) -> List[FrameTimecode]:
-    # Initialize scene detection
-    video_path = video_info[0]["filename"]
+def detect_scenes(video_path: str, video_info: Dict, max_scenes: int, crop_size: Tuple[int, int], min_frames_per_scene: int, max_frames_per_scene: int) -> List[Tuple[int, int]]:
+    # Initialize the video manager and scene detector
     video_manager = VideoManager([video_path])
-    scene_manager = SceneManager()
-    scene_manager.add_detector(ContentDetector(threshold=30, min_scene_len=min_frames_per_scene))
-    base_timecode = video_manager.get_base_timecode()
+    video_manager.set_downscale_factor(max(crop_size) / max(video_info["width"], video_info["height"]))
 
-    # Start video processing
-    video_manager.set_crop(crop_left=0, crop_right=crop_size[0], crop_top=0, crop_bottom=crop_size[1])
-    video_manager.start()
-    scene_manager.detect_scenes(frame_source=video_manager)
+    scene_detector = ContentDetector(
+        min_scene_len=min_frames_per_scene,
+        adaptive_threshold=30.0,
+        window_width=5,
+        min_content_val=0.5,
+        weights=None,
+        luma_only=False,
+        kernel_size=None
+    )
+    
+    # Create a video splitter and process the video
+    splitter = SceneSplitter(scene_detector)
+    video_splitter = VideoSplitter(video_manager, splitter)
+    video_splitter.split()
 
-    # Skip scenes with too few or too many frames
-    new_scenes = []
-    for i, scene in enumerate(scene_manager.get_scene_list(base_timecode)):
-        if scene[1]-scene[0] > max_frames_per_scene:
-            continue
-        if scene[1]-scene[0] < min_frames_per_scene:
-            continue
-        new_scenes.append(scene)
-        if len(new_scenes) >= max_scenes:
-            break
+    # Get the detected scenes
+    scenes = splitter.get_scene_list()
 
-    # Convert FrameTimecodes
-    scenes = []
-    for scene in new_scenes:
-        start_time = base_timecode + scene[0]
-        end_time = base_timecode + scene[1] - 1
-        scenes.append({"start_time": start_time, "end_time": end_time})
+    # Limit the number of scenes returned
+    if max_scenes and len(scenes) > max_scenes:
+        scenes = scenes[:max_scenes]
+
+    # Return the scene list
     return scenes
 
 def trim_video(start_time: float, end_time: float, input_path: str, output_path: str):
@@ -135,22 +131,19 @@ def get_video_info(video_path: str) -> dict:
 from typing import List, Tuple, Optional
 import tqdm
 
-def process_video(input_path: str, max_scenes: int, crop_size: Tuple[int, int], 
+def process_video(video_path: str, max_scenes: int, crop_size: Tuple[int, int], 
                   min_frames_per_scene: int, max_frames_per_scene: int, output_dir: str) -> List[str]:
     # Normalize input filename to standardized form
-    input_path = unicodedata.normalize('NFKD', input_path).encode('ascii', 'ignore').decode()
+    input_path = unicodedata.normalize('NFKD', video_path).encode('ascii', 'ignore').decode()
     # Get video info
-    #cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", video_path]
     cmd = f'ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,duration,r_frame_rate,bit_rate -of json "{input_path}"'
-
-    result = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    output = result.communicate()[0]
-    video_info = [stream for stream in sorted(
-        eval(output.decode())["streams"], key=lambda x: x["codec_type"] == "video", reverse=True
-    ) if "width" in stream]
-
+    print("ffprobe command:", cmd)  # add this line for debugging
+    output = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT)
+    print("ffprobe output:", output)  # add this line for debugging
+    streams = sorted(eval(output.decode())["streams"], key=lambda x: x["codec_name"] == "video", reverse=True)
+    video_info = streams[0]
     # Detect scenes
-    scenes = detect_scenes(video_info, max_scenes, crop_size, min_frames_per_scene, max_frames_per_scene)
+    scenes = detect_scenes(input_path, video_info, max_scenes, crop_size, min_frames_per_scene, max_frames_per_scene)
     scenes.sort(key=lambda scene: scene.start_time)
 
     # Trim scenes
@@ -159,7 +152,7 @@ def process_video(input_path: str, max_scenes: int, crop_size: Tuple[int, int],
         start_time = scene.start_time.get_seconds()
         end_time = scene.end_time.get_seconds()
         output_path = os.path.join(output_dir, f"scene_{i}.mp4")
-        trim_video(start_time, end_time, video_path, output_path)
+        trim_video(start_time, end_time, input_path, output_path)
         output_files.append(output_path)
     return output_files
 #######
@@ -272,28 +265,34 @@ class VideoTrimmer:
     def __call__(self, input_file: str, max_scenes: int, crop_size: Tuple[int, int], min_frames_per_scene: int, max_frames_per_scene: int, output_dir: str) -> str:
         try:
             # Get the path to the uploaded video file
-            # input_path = os.path.join(tempfile.gettempdir(), input_file.name)
-            input_path = os.path.join(tempfile.gettempdir(), secure_filename(input_file.name))
+            print("input_file ", input_file)
+            
+            input_path = os.path.join(tempfile.gettempdir(), secure_filename(input_file))
+
+            print("input_file ", input_file)
 
             with open(input_path, "wb") as f:
-                f.write(input_file.read())
+                with open(input_file, "rb") as file:
+                    f.write(file.read())
             os.chmod(input_path, 0o777)
 
             os.makedirs(output_dir, exist_ok=True)
             output_files = process_video(input_path, max_scenes, crop_size, min_frames_per_scene, max_frames_per_scene, output_dir)
             return f"Processed {len(output_files)} scenes: {', '.join(output_files)}"
         except Exception as e:
-            return f"Error processing video: {e}"
+            # print the error stacktrace and return the error message
+            traceback.print_exc()
+            return f"Error processing video: {e}"   
     
 iface = gr.Interface(
     fn=VideoTrimmer(),
     inputs=[
-        gr.inputs.File(label="Video file"),
+        gr.inputs.Textbox(label="Video file path"),
         gr.inputs.Number(label="Maximum number of scenes to extract", default=1),
         gr.inputs.Dropdown(label="Crop size", choices=[(240, 240), (256, 256), (480, 480), (512, 512), (720, 720), (1080, 1080)], default=(256, 256)),
         gr.inputs.Number(label="Minimum frames per scene", default=16),
         gr.inputs.Number(label="Maximum frames per scene", default=16),
-        gr.inputs.Textbox(label="Output directory", default="./output")
+        gr.inputs.Textbox(label="Output directory", default="/Users/sergiohlb/dev/videoTrimmer/video-trimmer-utility/output")
     ],
     outputs=gr.outputs.Textbox(),
     title="Video Trimmer",
