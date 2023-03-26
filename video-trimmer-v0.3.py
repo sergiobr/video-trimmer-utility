@@ -15,6 +15,56 @@ import gradio as gr
 import subprocess, os
 from werkzeug.utils import secure_filename
 
+class Scene:
+    def __init__(self, scene_num, start_time, end_time):
+        self.scene_num = scene_num
+        self.start_time = start_time
+        self.end_time = end_time
+
+class VideoTrimmer:
+    def __call__(self, input_file: str, max_scenes: int, crop_size: Tuple[int, int], min_frames_per_scene: int, max_frames_per_scene: int, output_dir: str) -> str:
+        try:
+            # Get the path to the uploaded video file
+            print("input_file ", input_file)
+            
+            input_path = os.path.join(tempfile.gettempdir(), secure_filename(input_file))
+
+            print("input_file ", input_file)
+
+            with open(input_path, "wb") as f:
+                with open(input_file, "rb") as file:
+                    f.write(file.read())
+            os.chmod(input_path, 0o777)
+
+            os.makedirs(output_dir, exist_ok=True)
+            output_files = process_video(input_path, max_scenes, crop_size, min_frames_per_scene, max_frames_per_scene, output_dir)
+            return f"Processed {len(output_files)} scenes: {', '.join(output_files)}"
+        except Exception as e:
+            # print the error stacktrace and return the error message
+            traceback.print_exc()
+            return f"Error processing video: {e}"   
+
+class SceneSplitter:
+    def __init__(self, scene_detector):
+        self.scene_detector = scene_detector
+
+    def split_scenes(self, video_manager):
+        self.scene_detector.detect_scenes(video_manager)
+        return self.scene_detector.get_scene_list()
+
+class VideoSplitter:
+    def __init__(self, video_manager, scene_splitter):
+        self.video_manager = video_manager
+        self.scene_splitter = scene_splitter
+
+    def split_video(self, output_dir, base_name):
+        scene_list = self.scene_splitter.split_scenes(self.video_manager)
+        for idx, scene in enumerate(scene_list):
+            start_time, end_time = scene
+            output_file = f"{output_dir}/{base_name}_scene_{idx + 1}.mp4"
+            self.video_manager.save_video(output_file, start_time, end_time)
+
+
 def crop_center(frame: np.ndarray, crop_size: Tuple[int, int]) -> np.ndarray:
     """
     Crops the center square of a frame with the given crop size.
@@ -55,12 +105,9 @@ def detect_scenes(video_path: str, video_info: Dict, max_scenes: int, crop_size:
 
     scene_detector = ContentDetector(
         min_scene_len=min_frames_per_scene,
-        adaptive_threshold=30.0,
-        window_width=5,
-        min_content_val=0.5,
+        threshold=30.0,
         weights=None,
         luma_only=False,
-        kernel_size=None
     )
     
     # Create a video splitter and process the video
@@ -96,11 +143,6 @@ def trim_video(start_time: float, end_time: float, input_path: str, output_path:
     # Run FFmpeg to trim video
     cmd = ["ffmpeg", "-i", input_path, "-ss", start, "-to", end, "-c", "copy", output_path]
     subprocess.run(cmd, capture_output=True, check=True)
-
-import re
-
-import json
-import subprocess
 
 def get_video_info(video_path: str) -> dict:
     """
@@ -156,12 +198,6 @@ def process_video(video_path: str, max_scenes: int, crop_size: Tuple[int, int],
         output_files.append(output_path)
     return output_files
 #######
-
-class Scene:
-    def __init__(self, scene_num, start_time, end_time):
-        self.scene_num = scene_num
-        self.start_time = start_time
-        self.end_time = end_time
         
 def extract_scenes(video_path: str, num_scenes: int, threshold: float) -> List[Scene]:
     # Initialize scene detector and video manager
@@ -187,7 +223,6 @@ def extract_scenes(video_path: str, num_scenes: int, threshold: float) -> List[S
                 break
     video_manager.release()
     return scene_list
-
 
 def get_duration(video_path: str) -> float:
     """
@@ -259,30 +294,7 @@ def trim_video(start_time: float, end_time: float, input_path: str, output_path:
     cmd = ["ffmpeg", "-y", "-ss", str(start_time), "-i", input_path, "-t", str(duration), "-c", "copy", output_path]
     subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
-import tempfile    
-    
-class VideoTrimmer:
-    def __call__(self, input_file: str, max_scenes: int, crop_size: Tuple[int, int], min_frames_per_scene: int, max_frames_per_scene: int, output_dir: str) -> str:
-        try:
-            # Get the path to the uploaded video file
-            print("input_file ", input_file)
-            
-            input_path = os.path.join(tempfile.gettempdir(), secure_filename(input_file))
-
-            print("input_file ", input_file)
-
-            with open(input_path, "wb") as f:
-                with open(input_file, "rb") as file:
-                    f.write(file.read())
-            os.chmod(input_path, 0o777)
-
-            os.makedirs(output_dir, exist_ok=True)
-            output_files = process_video(input_path, max_scenes, crop_size, min_frames_per_scene, max_frames_per_scene, output_dir)
-            return f"Processed {len(output_files)} scenes: {', '.join(output_files)}"
-        except Exception as e:
-            # print the error stacktrace and return the error message
-            traceback.print_exc()
-            return f"Error processing video: {e}"   
+import tempfile        
     
 iface = gr.Interface(
     fn=VideoTrimmer(),
