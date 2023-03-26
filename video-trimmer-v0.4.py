@@ -12,11 +12,11 @@ class SceneSplitter:
         self.scene_detector = scene_detector
 
     def split_scenes(self, video_clip):
-        for frame_number in range(0, int(video_clip.fps * video_clip.duration), int(video_clip.fps)):
-            frame_img = video_clip.get_frame(frame_number / video_clip.fps)
-            self.scene_detector.process_frame(frame_number, frame_img)
-
-        return self.scene_detector.get_scene_list()
+        for frame_time in video_clip.iter_frames(with_times=True, dtype=float):
+            frame_pos_sec, frame_img = frame_time
+            frame_img_uint8 = (frame_img * 255).astype(np.uint8)
+            self.scene_detector.process_frame(frame_pos_sec, frame_img_uint8)
+        return self.scene_detector.get_scene_list() if self.scene_detector else []
 
 @click.command()
 @click.argument('input_path', type=click.Path(exists=True, dir_okay=False))
@@ -36,8 +36,8 @@ def process_video(input_path, max_scenes, crop_size, min_frames_per_scene,
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    scenes = detect_scenes(input_path, video_info, max_scenes, crop_size,
-                           min_frames_per_scene, max_frames_per_scene, output_dir)
+    scenes = detect_scenes(input_path, video_info, max_scenes, crop_size, min_frames_per_scene, max_frames_per_scene, output_dir)
+
     return scenes
 
 
@@ -71,9 +71,9 @@ def detect_scenes(input_path, video_info, max_scenes, crop_size, min_frames_per_
 
         scene_detector.process_frame(frame_pos_sec, frame_img_uint8)
 
-    scene_splitter.split_scenes(video_clip)
-    output_files = scene_splitter.split_video(
-        output_dir, os.path.splitext(os.path.basename(input_path))[0])
+    scenes = scene_splitter.split_scenes(video_clip)
+    output_files = process_video(input_path, max_scenes, crop_size, min_frames_per_scene, max_frames_per_scene, output_dir)
+
     return output_files
 
 
