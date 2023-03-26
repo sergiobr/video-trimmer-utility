@@ -10,8 +10,8 @@ def create_dummy_mp4(filename='dummy', dir='.'):
         "ffmpeg",
         "-y",  # overwrite output file if it already exists
         "-f", "lavfi",
-        "-i", "color=white:s=1920x1080:r=30",
-        "-t", "10",
+        "-i", "color=white:s=512x512:r=30",
+        "-t", "3",
         "-c:v", "libx264",
         "-b:v", "1M",
         "-pix_fmt", "yuv420p",
