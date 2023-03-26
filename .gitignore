@@ -1,0 +1,6 @@
+venv/
+flagged/
+input/
+output/
+.DS_Store
+tests/dummy.mp4
